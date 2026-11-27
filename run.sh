@@ -21,9 +21,9 @@ echo "=== AETHER TEST ==="
 bash "$REPO/aether.sh" run "$PROMPT" 2>&1
 echo "run_rc=$?"
 echo "=== TUNNEL LOG TAIL ==="
-tail -12 /var/lib/ouc-aether/identities/tunnel.log 2>/dev/null
+tail -12 "$HOME/.local/state/ouc-aether/identities/tunnel.log" 2>/dev/null
 echo "=== IDENTITY FILES ==="
-ls -1 /var/lib/ouc-aether/identities/ 2>/dev/null | head -20
+ls -1 "$HOME/.local/state/ouc-aether/identities/" 2>/dev/null | head -20
 echo "=== END $(date -u) ==="
 
 cd "$REPO" || exit 1
