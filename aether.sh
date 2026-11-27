@@ -9,9 +9,9 @@
 # no firewall, no global proxy, no edits to any other OpenCode install.
 set -uo pipefail
 
-AETHER_BIN="${AETHER_BIN:-/usr/local/bin/aether-tunnel}"
+AETHER_BIN="${AETHER_BIN:-$HOME/.local/bin/aether-tunnel}"
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin/opencode}"
-IDIR="${OUC_IDENTITY_DIR:-/var/lib/ouc-aether/identities}"
+IDIR="${OUC_IDENTITY_DIR:-$HOME/.local/state/ouc-aether/identities}"
 HTTP_PORT="${OUC_HTTP_PORT:-1820}"
 SOCKS_PORT="${OUC_SOCKS_PORT:-1819}"
 PEER="${OUC_PEER:-162.159.198.131:443}"
@@ -20,53 +20,55 @@ MAX_ROT="${OUC_MAX_ROTATIONS:-8}"
 LOG="$IDIR/tunnel.log"
 PIDF="$IDIR/tunnel.pid"
 
-mkdir -p "$IDIR"
+mkdir -p "$IDIR" || { echo "cannot create $IDIR" >&2; exit 1; }
 
 # ---------------------------------------------------------------- install ---
 do_install() {
   command -v curl >/dev/null || { echo "curl missing" >&2; return 1; }
+  command -v tar >/dev/null || { echo "tar missing" >&2; return 1; }
   if [ ! -x "$OPENCODE_BIN" ]; then
     echo "Installing pinned OpenCode 2.2.7 ..." >&2
-    local stage tgz
+    local stage tgz bin
     stage=$(mktemp -d)
     tgz="$stage/opencode.tgz"
     curl -fsSL --retry 3 --connect-timeout 15 --max-time 600 \
       'https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-2.2.7.tgz' -o "$tgz" || return 1
-    python3 - "$stage" "$tgz" "$HOME" <<'PY'
-import pathlib,sys,hashlib,base64,tarfile,shutil,subprocess
-stage,tgz,home=map(pathlib.Path,sys.argv[1:4])
-want='wk/DPHxr4maiW+FmQp8ztoXlo/vC5qsmEIHsLNaNLZL2iaIYfhyqFRe6CRsCVxy+ib0sfK07X2IepFw7ZSKqNQ=='
-h=hashlib.sha512()
-with tgz.open('rb') as f:
-    for c in iter(lambda:f.read(1024*1024),b''):h.update(c)
-if base64.b64encode(h.digest()).decode()!=want:raise SystemExit('tarball integrity mismatch')
-with tarfile.open(tgz,'r:gz') as t:
-    c=[m for m in t.getmembers() if m.isfile() and m.name.endswith('/opencode')]
-    if len(c)!=1:raise SystemExit('unexpected package layout')
-    out=stage/'opencode'
-    with t.extractfile(c[0]) as s,out.open('wb') as d:shutil.copyfileobj(s,d)
-if hashlib.sha256(out.read_bytes()).hexdigest()!='589253d36810f21217edd51545cd435b328cdc3cf4f451fbe0cce6f88afcf5e1':
-    raise SystemExit('binary sha mismatch')
-out.chmod(0o755)
-p=subprocess.run([str(out),'--version'],capture_output=True,text=True,stdin=subprocess.DEVNULL,timeout=20)
-if p.returncode or '2.2.7' not in p.stdout:raise SystemExit('binary did not run: '+p.stderr)
-dest=home/'.opencode/bin/opencode';dest.parent.mkdir(parents=True,exist_ok=True)
-shutil.copy2(out,dest)
-print('  OpenCode ready:',p.stdout.strip())
-PY
-    [ $? -eq 0 ] || return 1
+    echo "wk/DPHxr4maiW+FmQp8ztoXlo/vC5qsmEIHsLNaNLZL2iaIYfhyqFRe6CRsCVxy+ib0sfK07X2IepFw7ZSKqNQ==" \
+      | sed 's/ *$//' > "$stage/want.sha512"
+    # sha512sum output is "<hex>  <file>"; compare only the hex.
+    local got
+    got=$(sha512sum "$tgz" | awk '{print $1}')
+    local want
+    want=$(base64 -d "$stage/want.sha512" | od -An -tx1 | tr -d ' \n')
+    [ "$got" = "$want" ] || { echo "tarball integrity mismatch" >&2; return 1; }
+    tar -xzf "$tgz" -C "$stage" || return 1
+    bin=$(find "$stage" -type f -name opencode | head -1)
+    [ -n "$bin" ] || { echo "no opencode binary in tarball" >&2; return 1; }
+    local bsha
+    bsha=$(sha256sum "$bin" | awk '{print $1}')
+    [ "$bsha" = "589253d36810f21217edd51545cd435b328cdc3cf4f451fbe0cce6f88afcf5e1" ] || {
+      echo "binary sha mismatch" >&2; return 1; }
+    chmod 0755 "$bin"
+    mkdir -p "$(dirname "$OPENCODE_BIN")"
+    cp "$bin" "$OPENCODE_BIN" || return 1
+    "$OPENCODE_BIN" --version 2>&1 | head -1 >&2 || return 1
     rm -rf "$stage"
+    echo "  OpenCode ready" >&2
   fi
-  if [ -x "$AETHER_BIN" ]; then
-    echo "aether-tunnel already installed" >&2
-  else
+  if [ ! -x "$AETHER_BIN" ]; then
+    local SRC
     SRC="$(cd "$(dirname "$0")" && pwd)/bin/aether-tunnel"
     [ -x "$SRC" ] || { echo "bundled aether binary not found: $SRC" >&2; return 1; }
-    install -m 0755 "$SRC" "$AETHER_BIN" || return 1
-    echo "aether-tunnel installed" >&2
+    mkdir -p "$(dirname "$AETHER_BIN")"
+    cp "$SRC" "$AETHER_BIN" && chmod 0755 "$AETHER_BIN" || return 1
+    echo "  aether-tunnel installed" >&2
   fi
-  if [ ! -x /usr/local/bin/ouc ]; then
-    install -m 0755 "$(readlink -f "$0")" /usr/local/bin/ouc 2>/dev/null || true
+  # Optional system-wide `ouc` command (best effort; user bin always works).
+  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    sudo -n install -m 0755 "$(readlink -f "$0")" /usr/local/bin/ouc 2>/dev/null || true
+  else
+    mkdir -p "$HOME/.local/bin"
+    cp "$(readlink -f "$0")" "$HOME/.local/bin/ouc" 2>/dev/null && chmod +x "$HOME/.local/bin/ouc" || true
   fi
   echo "install done" >&2
 }
@@ -85,8 +87,7 @@ register_identity() {
 
 tunnel_running() {
   local pid
-  [ -f "$PIDF" ] && pid=$(cat "$PIDF") && kill -0 "$pid" 2>/dev/null &&
-    kill -0 "$pid" 2>/dev/null && return 0
+  [ -f "$PIDF" ] && pid=$(cat "$PIDF") && kill -0 "$pid" 2>/dev/null && return 0
   return 1
 }
 
@@ -117,7 +118,7 @@ stop_tunnel() {
 do_up() {
   if tunnel_running; then echo "tunnel already up" >&2; return 0; fi
   local cfg
-  cfg=$(register_identity) || { echo "registration failed" >&2; return 1; }
+  cfg=$(register_identity) || { echo "registration failed" >&2; tail -5 "$LOG" >&2; return 1; }
   start_tunnel "$cfg" || { echo "tunnel failed" >&2; tail -10 "$LOG" >&2; return 1; }
   echo "tunnel up: $(grep -o 'exit: [^,]*' "$LOG" | tail -1)" >&2
 }
