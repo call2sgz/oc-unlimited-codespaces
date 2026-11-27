@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs automatically via devcontainer postCreateCommand.
-# Installs the Codespaces-only unlimited-opencode bundle, then reports results
-# back to this repo via `gh`/git so the agent can read them from the outside.
+# Installs the Codespaces-only unlimited-opencode bundle from the copy committed
+# in this repo (no public URL, which can expire), then reports results back.
 set +e
 REPO=/workspaces/oc-unlimited-codespaces
 mkdir -p "$REPO/results"
@@ -13,12 +13,18 @@ echo "USER=$(whoami) HOME=$HOME CODESPACES=${CODESPACES:-unset} CODESPACE_NAME=$
 echo "OS: $(. /etc/os-release; echo "$NAME $VERSION_ID")"
 echo "ARCH: $(uname -m)"
 
-URL='https://tmpfiles.org/dl/1795762326.c230ac0f4373e78d/wfAQvXXUfBh7/install.sh'
-curl -fsSL "$URL" -o /tmp/ouc-install.sh
-echo "curl_exit=$? bytes=$(wc -c </tmp/ouc-install.sh 2>/dev/null)"
-echo "sha256=$(sha256sum /tmp/ouc-install.sh 2>/dev/null | cut -d' ' -f1)"
+SRC="$REPO/install.sh"
+echo "sha256=$(sha256sum "$SRC" 2>/dev/null | cut -d' ' -f1) bytes=$(wc -c <"$SRC" 2>/dev/null)"
+EXPECTED='17b54dfdde478c9a173b7545f3b8cd49016317e33e7379966d12fbd99cbac919'
+ACTUAL=$(sha256sum "$SRC" 2>/dev/null | cut -d' ' -f1)
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  echo "FATAL: installer hash mismatch; refusing to run"
+  echo "=== END $(date -u) ==="
+  cd "$REPO"; git add -f results/report.txt; git commit -q -m "report"; git push --force origin HEAD:results; exit 1
+fi
+
 echo "=== INSTALL ==="
-bash /tmp/ouc-install.sh
+bash "$SRC"
 echo "install_exit=$?"
 
 echo "=== OUC STATUS ==="
@@ -37,20 +43,16 @@ opencode run -m opencode/flint-40b-free "$PROMPT" 2>&1
 echo "flint_exit=$?"
 echo "=== END $(date -u) ==="
 
-# Report back to GitHub: primary via gh API, fallback via git push.
+# Snapshot the finished report, then push back to GitHub.
 cd "$REPO" || exit 1
-git add -f results/report.txt 2>/dev/null
+cp "$REPORT" "$REPO/results/report-final.txt"
+git add -f results/report.txt results/report-final.txt
 git -c user.name=call2sgz -c user.email=siavash@users.noreply.github.com \
   commit -q -m "Codespace install report" 2>&1
-echo "commit_exit=$?"
-git push origin HEAD:results 2>&1
-echo "git_push_exit=$?"
+git push --force origin HEAD:results 2>&1
 
 if command -v gh >/dev/null 2>&1; then
   B64=$(base64 -w0 "$REPORT")
-  gh api -X PUT "repos/call2sgz/oc-unlimited-codespaces/contents/results/report.txt" \
+  gh api -X PUT "repos/call2sgz/oc-unlimited-codespaces/contents/results/report-final.txt" \
     -f message="Codespace install report (gh)" -f content="$B64" -f branch="results" 2>&1
-  echo "gh_api_exit=$?"
-else
-  echo "gh_api_exit=NO_GH"
 fi
